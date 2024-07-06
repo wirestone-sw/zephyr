@@ -28,11 +28,8 @@ struct xpt2046_config {
 struct xpt2046_data {
 	const struct device *dev;
 	struct gpio_callback int_gpio_cb;
-	struct k_work work;
 	struct k_work_delayable dwork;
 	uint8_t rbuf[9];
-	uint32_t last_x;
-	uint32_t last_y;
 	bool pressed;
 };
 
@@ -79,7 +76,8 @@ static void xpt2046_isr_handler(const struct device *dev, struct gpio_callback *
 	const struct xpt2046_config *config = data->dev->config;
 
 	gpio_remove_callback(config->int_gpio.port, &data->int_gpio_cb);
-	k_work_submit(&data->work);
+
+	k_work_reschedule(&data->dwork, K_NO_WAIT);
 }
 
 static int xpt2046_read_and_cumulate(const struct spi_dt_spec *bus, const struct spi_buf_set *tx,
@@ -101,29 +99,10 @@ static int xpt2046_read_and_cumulate(const struct spi_dt_spec *bus, const struct
 	return 0;
 }
 
-static void xpt2046_release_handler(struct k_work *kw)
+static void xpt2046_work_handler(struct k_work *kw)
 {
 	struct k_work_delayable *dw = k_work_delayable_from_work(kw);
 	struct xpt2046_data *data = CONTAINER_OF(dw, struct xpt2046_data, dwork);
-	struct xpt2046_config *config = (struct xpt2046_config *)data->dev->config;
-
-	if (!data->pressed) {
-		return;
-	}
-
-	/* Check if touch is still pressed */
-	if (gpio_pin_get_dt(&config->int_gpio) == 0) {
-		data->pressed = false;
-		input_report_key(data->dev, INPUT_BTN_TOUCH, 0, true, K_FOREVER);
-	} else {
-		/* Re-check later */
-		k_work_reschedule(&data->dwork, K_MSEC(10));
-	}
-}
-
-static void xpt2046_work_handler(struct k_work *kw)
-{
-	struct xpt2046_data *data = CONTAINER_OF(kw, struct xpt2046_data, work);
 	struct xpt2046_config *config = (struct xpt2046_config *)data->dev->config;
 	int ret;
 
@@ -148,7 +127,7 @@ static void xpt2046_work_handler(struct k_work *kw)
 	/* Calculate Xp = M * Xt + C using fixed point aritchmetics, where
 	 * Xp is the point in screen coordinates, Xt is the touch coordinates.
 	 * Use signed int32_t for calculation to ensure that we cover the roll-over to negative
-	 * values and return zero instead.
+	 * values and redfurn zero instead.
 	 */
 	int32_t mx = (config->screen_size_x << 16) / (config->max_x - config->min_x);
 	int32_t cx = (config->screen_size_x << 16) - mx * config->max_x;
@@ -164,29 +143,37 @@ static void xpt2046_work_handler(struct k_work *kw)
 
 	bool pressed = meas.z > config->threshold;
 
-	/* Don't send any other than "pressed" events.
-	 * releasing seem to cause just random noise
-	 */
-	if (pressed) {
-		LOG_DBG("raw: x=%4u y=%4u ==> x=%4d y=%4d", meas.x, meas.y, x, y);
+	LOG_DBG("%s %4u,%4u,%4u -> %3u,%3u", pressed ? "P" : "R",  meas.x, meas.y, meas.z, x, y);
 
+	if (pressed) {
 		input_report_abs(data->dev, INPUT_ABS_X, x, false, K_FOREVER);
 		input_report_abs(data->dev, INPUT_ABS_Y, y, false, K_FOREVER);
 		input_report_key(data->dev, INPUT_BTN_TOUCH, 1, true, K_FOREVER);
 
-		data->last_x = x;
-		data->last_y = y;
 		data->pressed = pressed;
-
-		/* Ensure that we send released event */
-		k_work_reschedule(&data->dwork, K_MSEC(100));
+	} else {
+		if (data->pressed) {
+			data->pressed = false;
+			input_report_key(data->dev, INPUT_BTN_TOUCH, 0, true, K_FOREVER);
+		}
 	}
 
-	ret = gpio_add_callback(config->int_gpio.port, &data->int_gpio_cb);
-	if (ret < 0) {
-		LOG_ERR("Could not set gpio callback");
+	/* Check if touch is still pressed */
+	if (gpio_pin_get_dt(&config->int_gpio) == 0) {
+		if (data->pressed) {
+			data->pressed = false;
+			input_report_key(data->dev, INPUT_BTN_TOUCH, 0, true, K_FOREVER);
+		}
+
+		ret = gpio_add_callback(config->int_gpio.port, &data->int_gpio_cb);
+		if (ret < 0) {
+			LOG_ERR("Could not set gpio callback");
+			return;
+		}
 		return;
 	}
+
+	k_work_reschedule(&data->dwork, K_MSEC(25));
 }
 
 static int xpt2046_init(const struct device *dev)
@@ -201,8 +188,7 @@ static int xpt2046_init(const struct device *dev)
 	}
 
 	data->dev = dev;
-	k_work_init(&data->work, xpt2046_work_handler);
-	k_work_init_delayable(&data->dwork, xpt2046_release_handler);
+	k_work_init_delayable(&data->dwork, xpt2046_work_handler);
 
 	if (!gpio_is_ready_dt(&config->int_gpio)) {
 		LOG_ERR("Interrupt GPIO controller device not ready");
