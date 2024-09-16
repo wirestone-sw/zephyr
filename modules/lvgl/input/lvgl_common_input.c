@@ -56,6 +56,7 @@ int lvgl_input_register_driver(lv_indev_type_t indev_type, const struct device *
 
 	lv_indev_drv_init(&common_data->indev_drv);
 	common_data->indev_drv.type = indev_type;
+	common_data->indev_drv.long_press_time = 2000;
 	common_data->indev_drv.read_cb = lvgl_input_read_cb;
 	common_data->indev_drv.user_data = (void *)dev;
 	common_data->indev = lv_indev_drv_register(&common_data->indev_drv);
