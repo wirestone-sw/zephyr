@@ -38,6 +38,9 @@
 #define STM32_SRC_PLL_R		(STM32_SRC_PLL_Q + 1)
 /* TODO: PLLSAI clocks */
 
+/** @brief RCC_CFGR register offset */
+#define CFGR_REG		0x08
+
 /** @brief RCC_CCIPR register offset */
 #define CCIPR_REG		0x88
 
@@ -63,5 +66,9 @@
 #define RTC_SEL(val)		STM32_DT_CLOCK_SELECT((val), 3, 8, BDCR_REG)
 /** CSR devices */
 #define RFWKP_SEL(val)		STM32_DT_CLOCK_SELECT((val), 3, 14, CSR_REG)
+
+/** CFGR devices */
+#define MCO1_SEL(val)           STM32_MCO_CFGR(val, 0xF, 24, CFGR_REG)
+#define MCO1_PRE(val)           STM32_MCO_CFGR(val, 0x7, 28, CFGR_REG)
 
 #endif /* ZEPHYR_INCLUDE_DT_BINDINGS_CLOCK_STM32WB_CLOCK_H_ */
